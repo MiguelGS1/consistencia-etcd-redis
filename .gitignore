@@ -1,4 +1,6 @@
+# Resultados das execuções (amostras, gráficos e logs): ficam só na máquina
 gerador/resultados/
+# Arquivos gerados pelo Python e pelo macOS
 __pycache__/
 *.pyc
 .DS_Store

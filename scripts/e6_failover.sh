@@ -20,6 +20,7 @@ for R in $(seq 1 "$REPETICOES"); do
 
   # Escolhe o no alvo
   if [ "$SISTEMA" = "etcd" ]; then
+    # O lider do Raft muda de uma execucao para outra, entao e consultado na hora
     docker exec n1 etcdctl --endpoints=http://172.21.0.11:2379 endpoint status --cluster -w table \
       > "gerador/$PASTA/lider_antes.txt"
     # a linha com IS LEADER = true tem o endereco do lider: 172.21.0.1X -> nX
@@ -27,31 +28,38 @@ for R in $(seq 1 "$REPETICOES"); do
     if [ "$VARIANTE" = "lider" ]; then
       ALVO="$LIDER"
     else
+      # seguidor: o primeiro no da lista que nao e o lider
       for NO in n1 n2 n3; do
         if [ "$NO" != "$LIDER" ]; then ALVO="$NO"; break; fi
       done
     fi
   else
+    # No Redis a topologia e fixa: n1 e sempre o primario
     if [ "$VARIANTE" = "lider" ]; then ALVO=n1; else ALVO=n3; fi
   fi
   echo "alvo: $ALVO ($VARIANTE)" | tee "gerador/$PASTA/alvo.txt"
 
+  # Carga em segundo plano, com --troca-no para os clientes sairem do no morto
   ./scripts/carga.sh "$SISTEMA" "$N" 180 "$PASTA" --troca-no &   # 30 s + 60 s fora + 90 s depois
   CARGA=$!
   sleep 30
+  # docker kill manda SIGKILL: o processo morre na hora, sem desligamento organizado (queda)
   evento "kill $ALVO"
   docker kill "$ALVO" >/dev/null
   sleep 60
+  # docker start religa o mesmo conteiner (no Redis, sem persistencia, ele volta vazio)
   evento "start $ALVO"
   docker start "$ALVO" >/dev/null
   wait $CARGA
 
+  # No etcd, guarda quem ficou lider depois da falha
   if [ "$SISTEMA" = "etcd" ]; then
     docker exec n1 etcdctl --endpoints=http://172.21.0.11:2379 endpoint status --cluster -w table \
       > "gerador/$PASTA/lider_depois.txt"
   fi
   # Logs dos nos: eleicao e termo no etcd; ressincronizacao ("Full resync", "Flushing old data") no Redis
   for NO in n1 n2 n3; do docker logs "$NO" > "gerador/$PASTA/log_$NO.txt" 2>&1; done
+  # Escritas perdidas e linha do tempo (com o tempo de failover e a taxa de erros)
   docker exec gerador python convergencia.py "$SISTEMA" "$PASTA"
   docker exec gerador python linha_tempo.py "$PASTA"
 done

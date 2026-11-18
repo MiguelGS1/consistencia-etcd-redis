@@ -3,11 +3,14 @@
 # E5: carga do E2 com clientes em todos os nos. Aos 30 s isola o n1 dos outros nos por 60 s,
 # depois cura a particao e deixa a carga rodar mais 90 s. No fim verifica a convergencia,
 # procura escritas confirmadas perdidas e gera a linha do tempo.
+# Sem --troca-no: os clientes do n1 continuam no n1 durante a particao, entao o
+# comportamento do lado isolado (minoria) aparece nas amostras.
 set -euo pipefail
 SISTEMA="$1"; N="$2"; REPETICOES="${3:-3}"
 cd "$(dirname "$0")/.."
 
 # Registra um evento no relogio do conteiner gerador (o mesmo relogio das amostras)
+# (o date do Mac nao tem %N; o do conteiner, Debian, da os nanossegundos)
 evento() { echo "$(docker exec gerador date +%s.%N),$1" >> "gerador/$PASTA/eventos.csv"; }
 
 for R in $(seq 1 "$REPETICOES"); do
@@ -15,31 +18,37 @@ for R in $(seq 1 "$REPETICOES"); do
   PASTA="resultados/e5/$SISTEMA/$(date +%Y%m%d-%H%M%S)"
   ./scripts/ambiente.sh "$SISTEMA"
   mkdir -p "gerador/$PASTA"
+  # No etcd, guarda quem era o lider antes (o resultado muda se o n1 isolado for o lider)
   if [ "$SISTEMA" = "etcd" ]; then
     docker exec n1 etcdctl --endpoints=http://172.21.0.11:2379 endpoint status --cluster -w table \
       > "gerador/$PASTA/lider_antes.txt"
   fi
 
+  # A carga roda em segundo plano (&) enquanto este script injeta a falha no meio dela
   ./scripts/carga.sh "$SISTEMA" "$N" 180 "$PASTA" &   # 30 s normal + 60 s particao + 90 s depois
   CARGA=$!
   sleep 30
+  # Marca o instante e isola o n1 da rede entre nos (script fornecido)
   evento "particao n1"
   ./scripts/particao.sh
-  INICIO=$SECONDS
+  INICIO=$SECONDS   # SECONDS: contador de segundos do proprio bash
 
   # Verificacao obrigatoria do apendice (A.9): se algum item der errado, o resultado nao vale
+  # "|| true": o ping que deve falhar nao pode interromper o script (set -e)
   { echo "n2 -> n3 (deve funcionar)";                         ./scripts/rtt.sh n2 172.20.0.13 || true
     echo "n1 -> n2 (deve falhar)";                            ./scripts/rtt.sh n1 172.20.0.12 || true
     echo "gerador -> n1, rede de clientes (deve funcionar)";  ./scripts/rtt.sh gerador 172.21.0.11 || true
   } > "gerador/$PASTA/verificacao_particao.txt" 2>&1
 
   sleep $((60 - (SECONDS - INICIO)))   # completa os 60 s de particao
+  # Marca o instante e reconecta o n1 (script fornecido); espera a carga terminar
   evento "cura n1"
   ./scripts/cura.sh
   wait $CARGA
 
   # Logs dos nos: eleicao e pre-vote no etcd; reconexao e ressincronizacao das replicas no Redis
   for NO in n1 n2 n3; do docker logs "$NO" > "gerador/$PASTA/log_$NO.txt" 2>&1; done
+  # Depois da cura: os nos convergiram? alguma escrita confirmada se perdeu? linha do tempo
   docker exec gerador python convergencia.py "$SISTEMA" "$PASTA"
   docker exec gerador python linha_tempo.py "$PASTA"
 done

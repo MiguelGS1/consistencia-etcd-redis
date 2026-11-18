@@ -35,6 +35,8 @@ TEXTO = "#52514e"
 
 def ler_eventos(pasta):
     """Linhas 'instante,evento', ex.: '1794705111.73,kill n2'."""
+    # O eventos.csv é gravado pelo e5_particao.sh / e6_failover.sh com o relógio do
+    # contêiner gerador, o mesmo relógio das amostras, então os instantes são comparáveis.
     with open(os.path.join(pasta, "eventos.csv"), newline="") as f:
         return [(float(t), nome) for t, nome in csv.reader(f)]
 
@@ -44,8 +46,10 @@ def main():
     inicio, _ = ler_execucao(pasta)
     eventos = ler_eventos(pasta)
     alvo = eventos[0][1].split()[-1]  # ex.: "kill n2" -> n2
+    # Primeiro evento = começo da falha (partição ou kill); segundo = fim (cura ou start)
     inicio_falha, fim_falha = eventos[0][0], eventos[1][0]
 
+    # Uma única passada pelas amostras, acumulando tudo o que o gráfico e o resumo precisam
     por_segundo = Counter()   # (segundo, operação, lado, sucesso) -> quantidade
     na_falha = Counter()      # (operação, lado, sucesso) -> quantidade, entre os dois eventos
     sem_valor = Counter()     # segundo -> GETs com sucesso que não acharam a chave
@@ -66,6 +70,9 @@ def main():
             ultima_escrita_com_erro = max(a["fim"], ultima_escrita_com_erro or 0)
 
     # maior pausa sem nenhum PUT confirmado, começando entre a falha e a volta do nó
+    # Ordena os instantes de PUT confirmado e olha cada intervalo entre dois consecutivos.
+    # Só contam os intervalos que terminam depois da falha e começam antes da volta do nó;
+    # se o intervalo começou antes da falha, conta só a partir do instante da falha.
     fins_put_ok.sort()
     pausa = 0.0
     for antes, depois in zip(fins_put_ok, fins_put_ok[1:]):
@@ -74,6 +81,8 @@ def main():
             pausa = max(pausa, depois - comeco)
 
     # gráfico: completações com sucesso, erros e GETs sem valor, um painel cada
+    # Eixo x: segundos desde o início da carga. Cor = lado (alvo ou outros nós);
+    # linha cheia = PUT, tracejada = GET.
     segundos = list(range(max(s for s, *_ in por_segundo) + 1))
     fig, (ax_ok, ax_erro, ax_vazio) = plt.subplots(3, 1, figsize=(10, 8), sharex=True,
                                                    gridspec_kw={"height_ratios": [3, 3, 2]})
@@ -84,6 +93,7 @@ def main():
                 ax.plot(segundos, [por_segundo[(s, op, lado, sucesso)] for s in segundos], estilo,
                         color=CORES[lado], linewidth=1.6, label=rotulo)
     ax_vazio.plot(segundos, [sem_valor[s] for s in segundos], color=TEXTO, linewidth=1.6)
+    # Linhas verticais pontilhadas nos eventos, com o nome do evento no painel de cima
     for t, nome in eventos:
         for ax in (ax_ok, ax_erro, ax_vazio):
             ax.axvline(t - inicio, color=TEXTO, linewidth=1, linestyle=":")
@@ -110,6 +120,7 @@ def main():
     linhas.append(f"  GETs sem valor (chave perdida) na execução inteira: {sum(sem_valor.values())}")
     linhas.append(f"  maior pausa sem nenhum PUT confirmado: {pausa:.2f} s")
 
+    # Só no E6 (o evento começa com "kill"): taxa de erros, failover e recuperação do último cliente
     if eventos[0][1].startswith("kill"):
         total = sum(na_falha.values())
         erros = sum(v for (op, lado, sucesso), v in na_falha.items() if not sucesso)

@@ -6,6 +6,10 @@ Uso: python grafico_e1.py
 Lê resultados/e1/<sistema>/N<n>/<execução>/. Para cada N usa a mediana das execuções;
 as barras vão do mínimo ao máximo. Marca o N ótimo (maior razão vazão / p99) e o ponto
 de vazão máxima (platô). Gera resultados/e1.png e resultados/e1.txt.
+
+Como ler a curva: cada ponto é um N. Enquanto o sistema tem folga, aumentar N aumenta
+a vazão quase sem mudar o p99 (a curva anda para a direita). Na saturação, a vazão
+para de subir e só a latência aumenta (a curva sobe na vertical: o platô).
 """
 import glob
 import statistics
@@ -24,6 +28,7 @@ TEXTO = "#52514e"
 def pontos(sistema):
     """Um ponto por N: mediana, mínimo e máximo da vazão e do p99 nas execuções."""
     lista = []
+    # Uma pasta por N (ex.: resultados/e1/etcd/N16/) e, dentro dela, uma subpasta por execução
     for pasta_n in glob.glob(f"resultados/e1/{sistema}/N*"):
         execucoes = sorted(glob.glob(pasta_n + "/*/"))
         if not execucoes:
@@ -36,7 +41,7 @@ def pontos(sistema):
                       "vazao": statistics.median(vazoes), "vazao_min": min(vazoes), "vazao_max": max(vazoes),
                       "p99": statistics.median(p99s), "p99_min": min(p99s), "p99_max": max(p99s),
                       "cpu_max": max(cpus) if cpus else None})
-    lista.sort(key=lambda p: p["n"])
+    lista.sort(key=lambda p: p["n"])   # em ordem de N, para a linha ligar os pontos na ordem
     for p in lista:
         p["razao"] = p["vazao"] / p["p99"]  # req/s por ms: critério do ponto ótimo
     return lista
@@ -44,6 +49,7 @@ def pontos(sistema):
 
 def tabela(sistema, lista):
     """Texto com a tabela do E1, o N ótimo e a vazão máxima sustentada."""
+    # Uma linha por N: mediana (mínimo–máximo) da vazão e do p99, razão e CPU máxima do gerador
     linhas = [f"{sistema}",
               f"  {'N':>4} {'exec':>4} {'vazão req/s (mín–máx)':>26} {'p99 ms (mín–máx)':>24} "
               f"{'vazão/p99':>10} {'CPU ger. máx':>12}"]
@@ -52,6 +58,7 @@ def tabela(sistema, lista):
         p99 = f"{p['p99']:.2f} ({p['p99_min']:.2f}–{p['p99_max']:.2f})"
         cpu = f"{p['cpu_max']:.0f}%" if p["cpu_max"] is not None else "-"
         linhas.append(f"  {p['n']:>4} {p['execucoes']:>4} {vazao:>26} {p99:>24} {p['razao']:>10.1f} {cpu:>12}")
+    # N ótimo = maior vazão/p99 (definição do enunciado); vazão máxima = maior vazão entre os N
     otimo = max(lista, key=lambda p: p["razao"])
     maximo = max(lista, key=lambda p: p["vazao"])
     linhas.append(f"  N ótimo = {otimo['n']} (vazão/p99 = {otimo['razao']:.1f} req/s por ms)")
@@ -68,6 +75,7 @@ def main():
             continue
         texto += tabela(sistema, lista) + [""]
         cor = CORES[sistema]
+        # Uma curva por sistema: x = vazão, y = p99 (medianas), com barras de mínimo a máximo
         x = [p["vazao"] for p in lista]
         y = [p["p99"] for p in lista]
         erro_x = [[p["vazao"] - p["vazao_min"] for p in lista], [p["vazao_max"] - p["vazao"] for p in lista]]
@@ -78,6 +86,7 @@ def main():
         # rótulos só nos pontos que interessam: N=1, ótimo, vazão máxima e o último N
         otimo = max(lista, key=lambda p: p["razao"])
         maximo = max(lista, key=lambda p: p["vazao"])
+        # Estrela grande no ponto ótimo
         ax.plot(otimo["vazao"], otimo["p99"], marker="*", markersize=16, color=cor,
                 markeredgecolor="white", linestyle="none")
         for p in lista:
@@ -88,6 +97,7 @@ def main():
                 ax.annotate(rotulo, (p["vazao"], p["p99"]), textcoords="offset points",
                             xytext=deslocamento, ha=alinhamento, fontsize=8, color=TEXTO)
 
+    # Eixos em escala log (o y em log é pedido pelo enunciado)
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel("Vazão efetiva (req/s com sucesso, escala log)")
